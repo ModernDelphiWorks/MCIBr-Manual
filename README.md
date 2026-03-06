@@ -446,4 +446,111 @@ Para entender profundamente como cada imposto se comporta em cenários de borda 
 
 ---
 
+## 9. 🛡 Sistema de Validação (Validators)
+
+> **"Como garantir que o usuário não informou um NCM inválido ou uma combinação de CST errada?"**
+
+O MCIBr possui um poderoso sistema de validação desacoplado, baseado no padrão **Pipes and Filters**. Isso permite que você valide dados fiscais complexos sem poluir seu código com `if..then..else` infinitos.
+
+### 1. Validadores Nativos Disponíveis
+O framework já vem com validadores prontos para uso na pasta `Source\Validations`:
+
+| Validador | Função | Arquivo |
+| :--- | :--- | :--- |
+| **`TValidatorPercentualMinMax`** | Garante que um valor percentual esteja entre 0 e 100. | `mcibr.validator.percentualminmax.pas` |
+| **`TValidatorIsEmpty`** | Verifica se um campo string ou numérico está vazio/zerado. | `mcibr.validator.isempty.pas` |
+| **`TMatrixClassTrib`** | Valida combinações de CST e Benefício Fiscal na Reforma Tributária. | `mcibr.validator.matrix.cclasstrib.pas` |
+
+### 2. Usabilidade: Como Aplicar Validações
+Você utiliza a interface `IValidationPipes` para encadear validações.
+
+```delphi
+uses 
+  mcibr.validator.pipe, 
+  mcibr.validator.percentualminmax,
+  mcibr.interfaces;
+
+procedure ValidarAliquota;
+var
+  LPipes: IValidationPipes;
+  LInfo: IValidationInfo;
+begin
+  // 1. Cria o Pipeline
+  LPipes := TValidationPipes.Create;
+  
+  // 2. Adiciona uma validação de Percentual (0 a 100)
+  LInfo := LPipes.Add;
+  LInfo.Validator := TValidatorPercentualMinMax.Create;
+  LInfo.Value := 150.00; // Valor inválido propositalmente
+  
+  // (Opcional) Metadados para mensagem de erro rica
+  LInfo.Arguments.FieldName := 'AliquotaICMS';
+  LInfo.Arguments.Message := 'A alíquota não pode ser maior que 100%';
+  
+  // 3. Executa todas as validações
+  LPipes.Validate;
+  
+  // 4. Verifica se houve erros
+  if LPipes.IsMessages then
+  begin
+    // Lista todas as falhas encontradas
+    ShowMessage('Erros encontrados: ' + sLineBreak + 
+                string.Join(sLineBreak, LPipes.ListMessages.ToArray));
+  end;
+end;
+```
+
+### 3. Criação: Como Criar seu Próprio Validador
+Você pode criar regras de negócio específicas para o seu ERP (ex: "Cliente do PR não pode comprar item X") e injetá-las no fluxo.
+
+**Passo 1: Criar a Classe de Regra (`IValidatorConstraint`)**
+```delphi
+uses mcibr.interfaces, mcibr.validator.constrait;
+
+type
+  TValidadorPrecoMinimo = class(TValidatorConstraint)
+  public
+    function Validate(const Value: TValue; const Args: IValidationArguments): TResultValidation; override;
+  end;
+
+function TValidadorPrecoMinimo.Validate(const Value: TValue; Args: IValidationArguments): TResultValidation;
+begin
+  // Inicializa sucesso (importante chamar inherited se houver lógica base)
+  inherited;
+  
+  // Lógica da validação
+  if Value.AsExtended < 10.00 then
+  begin
+    Result.Success := False;
+    Result.Failure := Format('O preço R$ %f está abaixo do mínimo permitido (R$ 10,00).', [Value.AsExtended]);
+  end
+  else
+    Result.Success := True;
+end;
+```
+
+**Passo 2: Usar no Pipe**
+```delphi
+LInfo := LPipes.Add;
+LInfo.Validator := TValidadorPrecoMinimo.Create;
+LInfo.Value := 5.00; // Vai falhar
+```
+
+### 4. Validação Avançada (Matrix de Regras - Reforma Tributária)
+O validador `TMatrixClassTrib` é um exemplo de validação complexa que cruza dados.
+
+```delphi
+uses mcibr.validator.matrix.cclasstrib;
+
+// Verifica se o CST 000 permite o benefício 000001
+if not TMatrixClassTrib.IsValid('000', '000001') then
+  Raise Exception.Create('Combinação inválida!');
+
+// Verifica se o modelo de documento (NFE) é permitido para esta regra
+if not TMatrixClassTrib.IsValidDFe('000', '000001', 'NFE') then
+  Raise Exception.Create('NFE não permite este benefício.');
+```
+
+---
+
 **MCIBr - Motor de Cálculo de Impostos Brasileiro**
